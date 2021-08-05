@@ -111,17 +111,15 @@ def incorporate_phenotypes(mt, pheno_path):
     print(f'\n[phenotypes]:" {pheno_path} was sucessfully loaded..')
     return mt
 
-def subset_variant(mt, variant):
-    v = hl.parse_variant(variant)
-    mt = mt.filter_rows( (mt.locus == v.locus) & (mt.alleles == v.alleles) )
-    #count = mt.count()
-    #print(f'\n{count[0]} rows were found for variants "{variant}".')
+def subset_variants(mt, variant):
+    variant_bool = (mt.locus != mt.locus)
+    for v in variant:
+        v = hl.parse_variant(v)
+        variant_bool = variant_bool | ( (mt.locus == v.locus) & (mt.alleles == v.alleles) ) 
+    mt = mt.filter_rows(variant_bool)
     return mt
 
 def linear_regression(mt, phenotype):
-    mt = mt.filter_cols(hl.is_missing(mt.pheno[phenotype]) == hl.bool(False))
-    counts = mt.count()
-    print(f'\n[regression]: Running GWAS on {counts[0]} variants and {counts[1]} samples..')
     result = hl.linear_regression_rows(
         y=[mt.pheno[phenotype]], 
         x=mt.GT.n_alt_alleles(), 
@@ -161,14 +159,17 @@ def main(args):
     if get_wb:
         mt = mt.filter_cols(mt.pheno.white_british == 1)
     if variant:
-        mt = subset_variant(mt, variant)
-    mt = recalc_info(mt)
+        mt = subset_variants(mt, variant)
+    
 
     # perform linear regression
     for phenotype in pheno:
-        print(phenotype)
-        result = linear_regression(mt, phenotype) # 'Hand_grip_strength_(left)_combined_white_ritish_InvNorm' 
-        write_result(mt, result, out_prefix, phenotype)
+        mt2 = mt.filter_cols(hl.is_missing(mt.pheno[phenotype]) == hl.bool(False))
+        mt2 = recalc_info(mt2)
+        #counts = mt.count()
+        #print(f'\n[regression]: Running GWAS on {counts[0]} variants and {counts[1]} samples..')
+        result = linear_regression(mt2, phenotype) # 'Hand_grip_strength_(left)_combined_white_ritish_InvNorm' 
+        write_result(mt2, result, out_prefix, phenotype)
         #result.export(f'{out_prefix}.{phenotype}.tsv')
     
 if __name__=='__main__':
@@ -181,10 +182,11 @@ if __name__=='__main__':
     parser.add_argument('--chrom', default=None, help='chromsome')
     parser.add_argument('--get_unrelated', action='store_true', help='Select all samples that are unrelated')
     parser.add_argument('--get_wb', action='store_true', help='Get self-reported white british')
-    parser.add_argument('--variant', default=None, help='Parse only a specific variant, e.g. "17:78075198:C:G"')
+    parser.add_argument('--variant', nargs='+', help='Parse specific variants, e.g. "17:78075198:C:G"')
     args = parser.parse_args()
 
     main(args)
+
 
 
 
