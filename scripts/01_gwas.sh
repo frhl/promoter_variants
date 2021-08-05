@@ -46,9 +46,8 @@ python3 ${hail_script} \
     --input_type "bgen" \
     --pheno_path "data/nicky_phenotypes.csv" \
     --pheno 'Hand_grip_strength_(left)_combined_white_ritish_InvNorm' 'Hand_grip_strength_(right)_combined_white_ritish_InvNorm' 'Forced_vital_capacity_(FVC)_Z-score_combined_white_ritish_InvNorm' 'FEV1-FVC_ratio_Z-score_combined_white_ritish_InvNorm'\
-    --variant "17:78075198:C:G" "17:78092070:C:T" "17:78086721:C:A" "17:78078503:C:T" \
+    --variant "17:78075198:C:G" "17:78086448:AC:A" "17:78078341:T:G" \
     --get_unrelated \
     --get_wb \
     --out_prefix "${out_dir}/test_ukb_wes_200k_chr${chr}"
-
 

@@ -112,11 +112,14 @@ def incorporate_phenotypes(mt, pheno_path):
     return mt
 
 def subset_variants(mt, variant):
-    variant_bool = (mt.locus != mt.locus)
-    for v in variant:
-        v = hl.parse_variant(v)
-        variant_bool = variant_bool | ( (mt.locus == v.locus) & (mt.alleles == v.alleles) ) 
-    mt = mt.filter_rows(variant_bool)
+    alleles = hl.literal([hl.parse_variant(v).alleles for v in variant])
+    loci = hl.literal([hl.parse_variant(v).locus for v in variant])
+    mt = mt.filter_rows(loci.contains(mt.locus) & alleles.contains(mt.alleles))
+    # variant_bool = (mt.locus != mt.locus)
+    #for v in variant:
+    #    v = hl.parse_variant(v)
+    #    variant_bool = variant_bool | ( (mt.locus == v.locus) & (mt.alleles == v.alleles) ) 
+    #mt = mt.filter_rows(variant_bool)
     return mt
 
 def linear_regression(mt, phenotype):
@@ -142,7 +145,7 @@ def main(args):
     out_prefix = str(args.out_prefix)
     chrom = int(args.chrom)
     pheno = args.pheno 
-    variant = str(args.variant)
+    variant = args.variant
     print(pheno)
 
     get_unrelated = args.get_unrelated
@@ -186,8 +189,6 @@ if __name__=='__main__':
     args = parser.parse_args()
 
     main(args)
-
-
 
 
 
