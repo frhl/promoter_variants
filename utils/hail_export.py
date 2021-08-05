@@ -4,7 +4,7 @@ import hail as hl
 import os
 import argparse
 
-def hail_init(chrom=None, log_prefix='get_vcf'):
+def hail_init(chrom=None, log_prefix='log'):
     r'''Initialize Hail '''
     assert chrom in range(1,23), 'only autosomes allowed'
     n_slots = os.environ.get('NSLOTS', 1)
@@ -60,6 +60,32 @@ def get_fam(app_id=11867, wes_200k_only=False):
     fam = hl.import_table(paths=fam_path, key='IID',types={f:'str' for f in ['FID','IID','PAT','MAT','SEX','PHEN']})
     return fam
 
+def maf_mac_filter(mt, min_maf=None, max_maf=None, min_mac=None, max_mac=None):
+    r'''Filter to variants with minor allele frequency > `maf` '''
+    if min_mac is not None:
+        if mt.info.AC.dtype==hl.dtype('array<int32>'):
+            mt = mt.filter_rows(hl.min(mt.info.AC)>min_mac)
+        elif mt.info.AC.dtype==hl.dtype('int32'):
+            mt = mt.filter_rows((mt.info.AC>min_mac) & (mt.info.AC<mt.info.AN-min_mac))
+        else:
+            raise ValueError('MatrixTable does not have an info.AC field with dtype int32 or array<int32>')
+    if max_mac is not None:
+        if mt.info.AC.dtype==hl.dtype('array<int32>'):
+            mt = mt.filter_rows(hl.max(mt.info.AC)<max_mac)
+        elif mt.info.AC.dtype==hl.dtype('int32'):
+            mt = mt.filter_rows((mt.info.AC<max_mac) & (mt.info.AC>mt.info.AN-max_mac))
+        else:
+            raise ValueError('MatrixTable does not have an info.AC field with dtype int32 or array<int32>')
+    if min_maf is not None:
+        if mt.info.AF.dtype==hl.dtype('array<float64>'):
+            mt = mt.filter_rows(hl.min(mt.info.AF)>min_maf)
+        elif mt.info.AF.dtype==hl.dtype('float64'):
+            mt = mt.filter_rows((mt.info.AF>min_maf) & (mt.info.AF<1-min_maf))
+        else:
+            raise ValueError('MatrixTable does not have an info.AF field with dtype float64 or array<float64>')
+            
+    return mt
+
 def filter_to_unrelated(mt, get_related=False, maf=None):
     r'''Filter to samples in duos/trios, as defined by fam file
     '''
@@ -67,7 +93,7 @@ def filter_to_unrelated(mt, get_related=False, maf=None):
     fam = fam.filter(hl.is_defined(mt.cols()[fam.IID])) # need to filter to samples present in mt first before collecting FIDs
     fam_ct = fam.count()
     col_ct = mt.count_cols()
-    print(f'\n{col_ct-fam_ct}/{col_ct} samples have IIDs missing from fam file') # samples with missing IIDs cannot be included in the related sample set
+    print(f'\n[missing]:" {col_ct-fam_ct}/{col_ct} samples have IIDs missing from fam file') # samples with missing IIDs cannot be included in the related sample set
     iids = fam.IID.collect()
     offspring_fids = fam.filter(hl.literal(iids).contains(fam.PAT)
                                 |hl.literal(iids).contains(fam.MAT)).FID.collect() # get the FIDs of offspring with at least one parent in the dataset
@@ -82,18 +108,20 @@ def filter_to_unrelated(mt, get_related=False, maf=None):
 def incorporate_phenotypes(mt, pheno_path):
     ht = hl.import_table(paths=pheno_path, delimiter =',', key = 'ID', impute = True, types = {'ID': hl.tstr})
     mt = mt.annotate_cols(pheno=ht.index(mt.s))
-    print(f'\n{pheno_path} was sucessfully loaded..')
+    print(f'\n[phenotypes]:" {pheno_path} was sucessfully loaded..')
     return mt
 
 def subset_variant(mt, variant):
     v = hl.parse_variant(variant)
     mt = mt.filter_rows( (mt.locus == v.locus) & (mt.alleles == v.alleles) )
-    #mt = mt.filter_rows(mt.locus == v.locus)
-    #mt = mt.filter_rows(mt.alleles == v.alleles)
-    count = mt.count()
-    print(f'\n{count[0]} rows were found for variants "{variant}".')
+    #count = mt.count()
+    #print(f'\n{count[0]} rows were found for variants "{variant}".')
+    return mt
 
 def linear_regression(mt, phenotype):
+    mt = mt.filter_cols(hl.is_missing(mt.pheno[phenotype]) == hl.bool(False))
+    counts = mt.count()
+    print(f'\n[regression]: Running GWAS on {counts[0]} variants and {counts[1]} samples..')
     result = hl.linear_regression_rows(
         y=[mt.pheno[phenotype]], 
         x=mt.GT.n_alt_alleles(), 
@@ -102,6 +130,10 @@ def linear_regression(mt, phenotype):
                        mt.pheno.PC5, mt.pheno.PC6, mt.pheno.PC7, mt.pheno.PC8,
                        mt.pheno.PC9, mt.pheno.PC10])
     return result
+
+def write_result(mt, result, out_prefix, phenotype):
+    result = result.annotate(info=mt.index_rows(result.locus,result.alleles).info)
+    result.export(f'{out_prefix}.{phenotype}.tsv')
 
 def main(args):
 
@@ -112,42 +144,44 @@ def main(args):
     out_prefix = str(args.out_prefix)
     chrom = int(args.chrom)
     pheno = args.pheno 
+    variant = str(args.variant)
     print(pheno)
 
     get_unrelated = args.get_unrelated
     get_wb = args.get_wb
 
     # init hail and get phenotypes
-    hail_init(chrom)
-    mt = get_table(input_path, input_type) # 'data/imputed/ukb_imp_chr17_v3.bgen'
-    mt = incorporate_phenotypes(mt, pheno_path)
+    hail_init(chrom, log_prefix = out_prefix)
+    mt = get_table(input_path, input_type) # mt = get_table('data/imputed/ukb_imp_chr17_v3.bgen', 'bgen')
+    mt = incorporate_phenotypes(mt, pheno_path) # mt = incorporate_phenotypes(mt, "data/nicky_phenotypes.csv")
 
-    # subset samples
+    # subset samples and variants
     if get_unrelated:
         mt = filter_to_unrelated(mt)
     if get_wb:
         mt = mt.filter_cols(mt.pheno.white_british == 1)
-    
-    # verbose
-    counts = mt.count()
-    print(f'\nRunning GWAS on {counts[0]} variants and {counts[1]} samples..')
+    if variant:
+        mt = subset_variant(mt, variant)
+    mt = recalc_info(mt)
 
     # perform linear regression
     for phenotype in pheno:
         print(phenotype)
         result = linear_regression(mt, phenotype) # 'Hand_grip_strength_(left)_combined_white_ritish_InvNorm' 
-        result.export(f'{out_prefix}.{phenotype}.tsv')
+        write_result(mt, result, out_prefix, phenotype)
+        #result.export(f'{out_prefix}.{phenotype}.tsv')
     
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--input_path', default=None, help='Path to input')
     parser.add_argument('--input_type', default=None, help='Input type, either "mt", "vcf" or "plink"')
-    parser.add_argument('--pheno_path', default=None, help='Path to phenotype input')
+    parser.add_argument('--pheno_path', default=None, help='Path to phenotype file (assuming .csv)')
     parser.add_argument('--pheno', nargs='+', help='What phenotypes should be used?')
     parser.add_argument('--out_prefix', default=None, help='Path prefix for output dataset')
     parser.add_argument('--chrom', default=None, help='chromsome')
     parser.add_argument('--get_unrelated', action='store_true', help='Select all samples that are unrelated')
     parser.add_argument('--get_wb', action='store_true', help='Get self-reported white british')
+    parser.add_argument('--variant', default=None, help='Parse only a specific variant, e.g. "17:78075198:C:G"')
     args = parser.parse_args()
 
     main(args)
