@@ -2,14 +2,14 @@
 #
 # Author: Frederik Lassen
 #
-#$ -N gwas
+#$ -N gwas_test
 #$ -wd /well/lindgren/UKBIOBANK/flassen/projects/promoter_variants
-#$ -o logs/gwas.log
-#$ -e logs/gwas.errors.log
+#$ -o logs/test.log
+#$ -e logs/test.errors.log
 #$ -P lindgren.prjc
-#$ -pe shmem 2
+#$ -pe shmem 1
 #$ -q short.qe
-#$ -t 2
+#$ -t 16
 
 set -o errexit
 set -o nounset
@@ -46,7 +46,7 @@ python3 ${hail_script} \
     --input_type "bgen" \
     --pheno_path "data/nicky_phenotypes.csv" \
     --pheno 'Hand_grip_strength_(left)_combined_white_ritish_InvNorm' 'Hand_grip_strength_(right)_combined_white_ritish_InvNorm' 'Forced_vital_capacity_(FVC)_Z-score_combined_white_ritish_InvNorm' 'FEV1-FVC_ratio_Z-score_combined_white_ritish_InvNorm'\
-    --variant "2:198934873:A:G" \
+    --variant "16:53800954:T:C", "16:28847246:T:C" \
     --get_unrelated \
     --get_wb \
     --out_prefix "${out_dir}/test_pheno_ukb_wes_200k_chr${chr}"

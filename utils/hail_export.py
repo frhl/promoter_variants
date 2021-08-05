@@ -15,6 +15,7 @@ def hail_init(chrom=None, log_prefix='log'):
             master=f'local[{n_slots}]')
 
 def get_contigs():
+    r'''enumerate contigs for .bgen dictionary'''
     d1 = {f'0{x}':str(x) for x in range(1,10)}
     d2 = {str(x):str(x) for x in range(11,22)}
     d = {**d1, **d2}
@@ -61,6 +62,7 @@ def recalc_info(mt, maf=None, info_field='info', gt_field='GT'):
     return mt
 
 def get_fam(app_id=11867, wes_200k_only=False):
+    r'''Get family file'''
     assert app_id in {11867,12788}
     fam_path = f'/well/lindgren/UKBIOBANK/nbaya/resources/ukb{app_id}_{"wes_200k_" if wes_200k_only else ""}pedigree.fam'
     fam = hl.import_table(paths=fam_path, key='IID',types={f:'str' for f in ['FID','IID','PAT','MAT','SEX','PHEN']})
@@ -93,8 +95,7 @@ def maf_mac_filter(mt, min_maf=None, max_maf=None, min_mac=None, max_mac=None):
     return mt
 
 def filter_to_unrelated(mt, get_related=False, maf=None):
-    r'''Filter to samples in duos/trios, as defined by fam file
-    '''
+    r'''Filter to samples in duos/trios, as defined by fam file'''
     fam = get_fam()
     fam = fam.filter(hl.is_defined(mt.cols()[fam.IID])) # need to filter to samples present in mt first before collecting FIDs
     fam_ct = fam.count()
@@ -111,31 +112,67 @@ def filter_to_unrelated(mt, get_related=False, maf=None):
     mt = recalc_info(mt=mt, maf=maf)
     return mt
 
+
+def one_hot_encode(i, n_categories):
+     r''' One hot encode categories'''
+    return hl.range(n_categories).map(lambda j: hl.int(i == j))
+
+def encode_categorical(mt, variable):
+    r'''encode string variables as categorical variables using one-hot encoding
+    note, that cols that contains missing date is removed.
+    '''
+    mt = mt.filter_cols(hl.is_missing(mt.pheno[variable]) == hl.bool(False))
+    categories = mt.aggregate_cols(hl.agg.collect_as_set(mt.pheno[variable]))
+    n_categories = len(categories)
+    # one hot encode all categories
+    one_hot_encoding = hl.literal(
+        {category: one_hot_encode(index, n_categories) for index, category 
+        in enumerate(categories)})
+    # create a struct with the information
+    mt = mt.annotate_cols(info=hl.struct())
+    mt = mt.annotate_cols(info=mt.info.annotate(test=one_hot_encoding[mt.pheno[variable]]))
+    # append one hot encoding to the struct
+    for i in range(n_categories):
+        mt = mt.annotate_cols(info=mt.info.annotate(tmp=mt.info.test[i]).rename({'tmp':str(i)}))
+    print(f'[one hot encoding] Created {n_categories} for {variable}.')
+    # drop existing variable
+    mt = mt.annotate_cols(info=mt.info.drop('test'))
+    mt = mt.rename({'info':f'{variable}'})
+    return(mt)
+
 def incorporate_phenotypes(mt, pheno_path):
-    ht = hl.import_table(paths=pheno_path, delimiter =',', key = 'ID', impute = True, types = {'ID': hl.tstr})
+    r'''Annotate matrix table with inputted phenotypes'''
+    ht = hl.import_table(paths=pheno_path, delimiter =',', key = 'ID', impute = True, types = {'ID': hl.tstr, 'genotyping_array': hl.tstr, 'ukbb_centre': hl.tstr, 'sex': hl.tstr})
     mt = mt.annotate_cols(pheno=ht.index(mt.s))
     print(f'\n[phenotypes]:" {pheno_path} was sucessfully loaded..')
     return mt
 
 def subset_variants(mt, variant):
+    r'''Subset list of variants'''
     alleles = hl.literal([hl.parse_variant(v).alleles for v in variant])
     loci = hl.literal([hl.parse_variant(v).locus for v in variant])
     mt = mt.filter_rows(loci.contains(mt.locus) & alleles.contains(mt.alleles))
-    # variant_bool = (mt.locus != mt.locus)
-    #for v in variant:
-    #    v = hl.parse_variant(v)
-    #    variant_bool = variant_bool | ( (mt.locus == v.locus) & (mt.alleles == v.alleles) ) 
-    #mt = mt.filter_rows(variant_bool)
     return mt
 
+def flatten(t):
+    r'''flatten lists'''
+    return [item for sublist in t for item in sublist]
+
+def unpack_onehot(mt, var):
+    r'''Subset list of variants'''
+    return [mt[var][str(i)] for i in range(hl.eval(hl.len(mt[var])))]
+
 def linear_regression(mt, phenotype):
+    r'''Perform linear regression'''
     result = hl.linear_regression_rows(
         y=[mt.pheno[phenotype]], 
         x=mt.GT.n_alt_alleles(), 
-        covariates=[1, mt.pheno.age, mt.pheno.genotyping_array, mt.pheno.ukbb_centre, mt.pheno.sex,
+        covariates=flatten([[1, mt.pheno.age, mt.pheno.is_female,
                        mt.pheno.PC1, mt.pheno.PC2, mt.pheno.PC3, mt.pheno.PC4,
                        mt.pheno.PC5, mt.pheno.PC6, mt.pheno.PC7, mt.pheno.PC8,
-                       mt.pheno.PC9, mt.pheno.PC10])
+                       mt.pheno.PC9, mt.pheno.PC10],
+                       unpack_onehot(mt, 'ukbb_centre'),
+                       unpack_onehot(mt, 'genotyping_array')]))
     return result
 
 def write_result(mt, result, out_prefix, phenotype):
@@ -170,16 +207,17 @@ def main(args):
     if variant:
         mt = subset_variants(mt, variant)
     
+    # deal with categorical phenotypes
+    mt = encode_categorical(mt, 'ukbb_centre')
+    mt = encode_categorical(mt, 'genotyping_array')
+    mt = mt.annotate_cols(pheno = mt.pheno.annotate(is_female = mt.pheno.sex == 1))
 
     # perform linear regression
     for phenotype in pheno:
         mt2 = mt.filter_cols(hl.is_missing(mt.pheno[phenotype]) == hl.bool(False))
         mt2 = recalc_info(mt2)
-        #counts = mt.count()
-        #print(f'\n[regression]: Running GWAS on {counts[0]} variants and {counts[1]} samples..')
         result = linear_regression(mt2, phenotype) # 'Hand_grip_strength_(left)_combined_white_ritish_InvNorm' 
         write_result(mt2, result, out_prefix, phenotype)
-        #result.export(f'{out_prefix}.{phenotype}.tsv')
     
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
@@ -195,6 +233,7 @@ if __name__=='__main__':
     args = parser.parse_args()
 
     main(args)
+
 
 
 
