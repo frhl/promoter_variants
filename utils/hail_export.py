@@ -14,6 +14,12 @@ def hail_init(chrom=None, log_prefix='log'):
             default_reference='GRCh37',
             master=f'local[{n_slots}]')
 
+def get_contigs():
+    d1 = {f'0{x}':str(x) for x in range(1,10)}
+    d2 = {str(x):str(x) for x in range(11,22)}
+    d = {**d1, **d2}
+    return d
+
 def get_table(input_path, input_type, cache=False):
     r'''Import mt/vcf/plink tables '''
     if input_type=='mt':
@@ -23,7 +29,7 @@ def get_table(input_path, input_type, cache=False):
     elif input_type=='plink':
         mt = hl.import_plink(*[f'{input_path}.{x}' for x in ['bed','bim','fam']])
     elif input_type=='bgen':
-        hl.index_bgen(input_path, contig_recoding={"01": "1"}, reference_genome='GRCh37')
+        hl.index_bgen(input_path, contig_recoding=get_contigs(), reference_genome='GRCh37')
         mt = hl.import_bgen(input_path, 
             entry_fields = ['GT', 'GP'], 
             sample_file = '/gpfs1/well/lindgren/UKBIOBANK/DATA/SAMPLE_FAM/ukb11867_imp_chr1_v3_s487395.sample')
