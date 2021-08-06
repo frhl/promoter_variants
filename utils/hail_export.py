@@ -68,32 +68,6 @@ def get_fam(app_id=11867, wes_200k_only=False):
     fam = hl.import_table(paths=fam_path, key='IID',types={f:'str' for f in ['FID','IID','PAT','MAT','SEX','PHEN']})
     return fam
 
-def maf_mac_filter(mt, min_maf=None, max_maf=None, min_mac=None, max_mac=None):
-    r'''Filter to variants with minor allele frequency > `maf` '''
-    if min_mac is not None:
-        if mt.info.AC.dtype==hl.dtype('array<int32>'):
-            mt = mt.filter_rows(hl.min(mt.info.AC)>min_mac)
-        elif mt.info.AC.dtype==hl.dtype('int32'):
-            mt = mt.filter_rows((mt.info.AC>min_mac) & (mt.info.AC<mt.info.AN-min_mac))
-        else:
-            raise ValueError('MatrixTable does not have an info.AC field with dtype int32 or array<int32>')
-    if max_mac is not None:
-        if mt.info.AC.dtype==hl.dtype('array<int32>'):
-            mt = mt.filter_rows(hl.max(mt.info.AC)<max_mac)
-        elif mt.info.AC.dtype==hl.dtype('int32'):
-            mt = mt.filter_rows((mt.info.AC<max_mac) & (mt.info.AC>mt.info.AN-max_mac))
-        else:
-            raise ValueError('MatrixTable does not have an info.AC field with dtype int32 or array<int32>')
-    if min_maf is not None:
-        if mt.info.AF.dtype==hl.dtype('array<float64>'):
-            mt = mt.filter_rows(hl.min(mt.info.AF)>min_maf)
-        elif mt.info.AF.dtype==hl.dtype('float64'):
-            mt = mt.filter_rows((mt.info.AF>min_maf) & (mt.info.AF<1-min_maf))
-        else:
-            raise ValueError('MatrixTable does not have an info.AF field with dtype float64 or array<float64>')
-            
-    return mt
-
 def filter_to_unrelated(mt, get_related=False, maf=None):
     r'''Filter to samples in duos/trios, as defined by fam file'''
     fam = get_fam()
@@ -114,7 +88,7 @@ def filter_to_unrelated(mt, get_related=False, maf=None):
 
 
 def one_hot_encode(i, n_categories):
-     r''' One hot encode categories'''
+    r''' One hot encode categories'''
     return hl.range(n_categories).map(lambda j: hl.int(i == j))
 
 def encode_categorical(mt, variable):
@@ -129,20 +103,20 @@ def encode_categorical(mt, variable):
         {category: one_hot_encode(index, n_categories) for index, category 
         in enumerate(categories)})
     # create a struct with the information
-    mt = mt.annotate_cols(info=hl.struct())
-    mt = mt.annotate_cols(info=mt.info.annotate(test=one_hot_encoding[mt.pheno[variable]]))
+    mt = mt.annotate_cols(placeholder=hl.struct())
+    mt = mt.annotate_cols(placeholder=mt.placeholder.annotate(test=one_hot_encoding[mt.pheno[variable]]))
     # append one hot encoding to the struct
     for i in range(n_categories):
-        mt = mt.annotate_cols(info=mt.info.annotate(tmp=mt.info.test[i]).rename({'tmp':str(i)}))
-    print(f'[one hot encoding] Created {n_categories} for {variable}.')
+        mt = mt.annotate_cols(placeholder=mt.placeholder.annotate(tmp=mt.placeholder.test[i]).rename({'tmp':str(i)}))
+    print(f'[one hot encoding] Created {n_categories} variables for {variable}.')
     # drop existing variable
-    mt = mt.annotate_cols(info=mt.info.drop('test'))
-    mt = mt.rename({'info':f'{variable}'})
+    mt = mt.annotate_cols(placeholder=mt.placeholder.drop('test'))
+    mt = mt.rename({'placeholder':f'{variable}'})
     return(mt)
 
 def incorporate_phenotypes(mt, pheno_path):
     r'''Annotate matrix table with inputted phenotypes'''
-    ht = hl.import_table(paths=pheno_path, delimiter =',', key = 'ID', impute = True, types = {'ID': hl.tstr, 'genotyping_array': hl.tstr, 'ukbb_centre': hl.tstr, 'sex': hl.tstr})
+    ht = hl.import_table(paths=pheno_path, delimiter =',', key = 'ID', impute = True, types = {'ID': hl.tstr, 'genotyping_array': hl.tstr, 'ukbb_centre': hl.tstr})
     mt = mt.annotate_cols(pheno=ht.index(mt.s))
     print(f'\n[phenotypes]:" {pheno_path} was sucessfully loaded..')
     return mt
@@ -162,6 +136,17 @@ def unpack_onehot(mt, var):
     r'''Subset list of variants'''
     return [mt[var][str(i)] for i in range(hl.eval(hl.len(mt[var])))]
 
+def linear_regression_simple(mt, phenotype):
+    r'''Perform linear regression'''
+    result = hl.linear_regression_rows(
+        y=[mt.pheno[phenotype]], 
+        x=hl.gp_dosage(mt.GP), #mt.GT.n_alt_alleles(), 
+        covariates=[1, mt.pheno.is_female,
+                       mt.pheno.PC1, mt.pheno.PC2, mt.pheno.PC3, mt.pheno.PC4,
+                       mt.pheno.PC5, mt.pheno.PC6, mt.pheno.PC7, mt.pheno.PC8,
+                       mt.pheno.PC9, mt.pheno.PC10])
+    return result
+
 def linear_regression(mt, phenotype):
     r'''Perform linear regression'''
     result = hl.linear_regression_rows(
@@ -174,6 +159,7 @@ def linear_regression(mt, phenotype):
                        unpack_onehot(mt, 'ukbb_centre'),
                        unpack_onehot(mt, 'genotyping_array')]))
     return result
+
 
 def write_result(mt, result, out_prefix, phenotype):
     result = result.annotate(info=mt.index_rows(result.locus,result.alleles).info)
@@ -188,7 +174,7 @@ def main(args):
     out_prefix = str(args.out_prefix)
     chrom = int(args.chrom)
     pheno = args.pheno 
-    variant = args.variant
+    variant = flatten([args.variant])
     print(pheno)
 
     get_unrelated = args.get_unrelated
@@ -203,9 +189,9 @@ def main(args):
     if get_unrelated:
         mt = filter_to_unrelated(mt)
     if get_wb:
-        mt = mt.filter_cols(mt.pheno.white_british == 1)
-    if variant:
-        mt = subset_variants(mt, variant)
+        mt = mt.filter_cols(mt.pheno['white.british'] == 1)
+    if variant: 
+        mt = subset_variants(mt, variant) #  variant = ["20:34025756:A:G", "20:33905619:A:G"]
     
     # deal with categorical phenotypes
     mt = encode_categorical(mt, 'ukbb_centre')
@@ -216,7 +202,7 @@ def main(args):
     for phenotype in pheno:
         mt2 = mt.filter_cols(hl.is_missing(mt.pheno[phenotype]) == hl.bool(False))
         mt2 = recalc_info(mt2)
-        result = linear_regression(mt2, phenotype) # 'Hand_grip_strength_(left)_combined_white_ritish_InvNorm' 
+        result = linear_regression(mt2, phenotype) # phenotype = 'Hand_grip_strength_(left)_combined_whitebritish_InvNorm' 
         write_result(mt2, result, out_prefix, phenotype)
     
 if __name__=='__main__':
@@ -233,7 +219,6 @@ if __name__=='__main__':
     args = parser.parse_args()
 
     main(args)
-
 
 
 

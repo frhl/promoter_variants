@@ -9,7 +9,7 @@
 #$ -P lindgren.prjc
 #$ -pe shmem 1
 #$ -q short.qe
-#$ -t 16
+#$ -t 20
 
 set -o errexit
 set -o nounset
@@ -46,7 +46,7 @@ python3 ${hail_script} \
     --input_type "bgen" \
     --pheno_path "data/nicky_phenotypes.csv" \
     --pheno 'Hand_grip_strength_(left)_combined_white_ritish_InvNorm' 'Hand_grip_strength_(right)_combined_white_ritish_InvNorm' 'Forced_vital_capacity_(FVC)_Z-score_combined_white_ritish_InvNorm' 'FEV1-FVC_ratio_Z-score_combined_white_ritish_InvNorm'\
-    --variant "16:53800954:T:C", "16:28847246:T:C" \
+    --variant "20:34025756:A:G", "20:33905619:A:G" \
     --get_unrelated \
     --get_wb \
     --out_prefix "${out_dir}/test_pheno_ukb_wes_200k_chr${chr}"
